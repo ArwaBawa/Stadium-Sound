@@ -1,0 +1,10 @@
+openai
+librosa
+numpy
+opencv-python
+mediapipe
+pandas
+scikit-learn
+tenacity
+python-dotenv
+tqdm
