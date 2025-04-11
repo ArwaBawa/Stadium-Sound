@@ -24,8 +24,6 @@ Can be deployed on both stadium screens and AR glasses for flexible and inclusiv
 - **Unity**
 - **ML Classification Model** (for background emotion mapping)
 - **MediaPipe** (for gesture recognition and avatar control)
-![image](https://github.com/user-attachments/assets/a30b0806-da7c-4b5c-98d8-53cb635bcc8a)
-
   
 # Datasets Used
 
