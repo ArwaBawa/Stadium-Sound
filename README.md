@@ -27,10 +27,10 @@ Can be deployed on both stadium screens and AR glasses for flexible and inclusiv
   
 # Datasets Used
 
-**Football Match Commentary** – Collected manually from real football matches
-**General Words Dataset** – Public datasets used to train everyday vocabulary
-**Sign Language Gloss Dataset** – Combination of online resources and custom-created glosses specific to football
-**Emotion & Crowd Noise Data** – Audio datasets from online sources and manually extracted match recordings
+- **Football Match Commentary** – Collected manually from real football matches
+- **General Words Dataset** – Public datasets used to train everyday vocabulary
+- **Sign Language Gloss Dataset** – Combination of online resources and custom-created glosses specific to football
+- **Emotion & Crowd Noise Data** – Audio datasets from online sources and manually extracted match recordings
 # Methodology
 ![image](https://github.com/user-attachments/assets/42b8b3d3-41cb-4971-b687-3a74fde1cd1b)
 
