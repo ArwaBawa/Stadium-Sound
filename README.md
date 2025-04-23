@@ -25,7 +25,8 @@ Can be deployed on both stadium screens and AR glasses for flexible and inclusiv
 - **ML Classification Model** (for background emotion mapping)
 - **MediaPipe** (for gesture recognition and avatar control)
 
-  
+  ![image](https://github.com/user-attachments/assets/bd7919cc-3dc3-49d6-8179-90344c6ea5af)
+
 # Datasets Used
 
 **Football Match Commentary** – Collected manually from real football matches
