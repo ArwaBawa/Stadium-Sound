@@ -3,109 +3,160 @@ import pandas as pd
 import numpy as np
 from pathlib import Path
 from tqdm import tqdm
-from config import config
+from config import Config
 
 class VideoGenerator:
     def __init__(self):
-        # Load datasets
-        self.df = pd.read_csv(config.ANNOTATIONS_FILE)
-        self.df['label'] = self.df['label'].str.strip().str.lower()
-        self.excitement_data = pd.read_csv(config.OUTPUT_DIR / "excitement.csv")
+        self.sign_dataset = self._load_annotations()
         self.current_time = 0.0
+        self.background = self._create_scrolling_gradient()
+        self.transition_frames = self._create_transition_effect()
 
-    def _find_video_path(self, word):
-        """Find video path for a word with fingerspelling fallback"""
+    def _load_annotations(self):
+        """Load sign annotations with robust error handling"""
+        try:
+            if Config.ANNOTATIONS_FILE.exists():
+                return pd.read_csv(Config.ANNOTATIONS_FILE)
+            print(f"⚠️ Annotations file not found at {Config.ANNOTATIONS_FILE}")
+            return pd.DataFrame(columns=['label', 'video_filename'])
+        except Exception as e:
+            print(f"⚠️ Error loading annotations: {e}")
+            return pd.DataFrame(columns=['label', 'video_filename'])
+
+    def _create_scrolling_gradient(self):
+        """Create a horizontally scrolling gradient background"""
+        width, height = Config.VIDEO_SIZE
+        gradient = np.zeros((height, width, 3), dtype=np.uint8)
+        
+        # Create HSV gradient (better color control)
+        for x in range(width):
+            hue = int(180 * (x / width))  # 0-180 range for OpenCV
+            gradient[:, x] = [hue, 255, 255]
+        
+        return cv2.cvtColor(gradient, cv2.COLOR_HSV2BGR)
+
+    def _create_transition_effect(self):
+        """Generate smooth transition frames between signs"""
+        width, height = Config.VIDEO_SIZE
+        frames = []
+        for alpha in np.linspace(0, 1, Config.FPS//2):  # Half-second transition
+            frame = np.zeros((height, width, 3), dtype=np.uint8)
+            cv2.circle(
+                frame,
+                (width//2, height//2),
+                int(height*alpha),
+                (255, 255, 255),
+                -1
+            )
+            frames.append(frame)
+        return frames
+
+    def _find_sign_video(self, word):
+        """Hierarchical video path resolution"""
         word_clean = word.strip().lower()
         
-        # 1. Check in sign dataset
-        match = self.df[self.df['label'] == word_clean]
-        if not match.empty:
-            path = config.SIGN_DATASET / match.iloc[0]['video_filename']
-            if path.exists():
-                return path
+        # 1. Check in annotations
+        if not self.sign_dataset.empty:
+            match = self.sign_dataset[
+                self.sign_dataset['label'].str.lower() == word_clean
+            ]
+            if not match.empty:
+                path = Config.SIGN_DATASET / match.iloc[0]['video_filename']
+                if path.exists():
+                    return path
         
-        # 2. Try fingerspelling
-        if len(word_clean) == 1:  # Single letter
-            path = config.FINGERSPELLING / f"{word_clean.upper()}.mp4"
-            if path.exists():
-                return path
+        # 2. Check fingerspelling
+        single_letter_path = Config.FINGERSPELLING / f"{word_clean.upper()}.mp4"
+        if single_letter_path.exists():
+            return single_letter_path
         
-        # 3. Full word fingerspelling fallback
-        print(f"Word '{word}' not found - attempting fingerspelling...")
-        return self._spell_word(word_clean)
+        # 3. Spell multi-letter words
+        if len(word_clean) > 1:
+            return self._spell_word_fingerspelling(word_clean)
+        
+        return None
 
-    def _spell_word(self, word):
-        """Generate paths for spelling out a word"""
+    def _spell_word_fingerspelling(self, word):
+        """Generate letter-by-letter paths with validation"""
         paths = []
         for letter in word:
-            path = config.FINGERSPELLING / f"{letter.upper()}.mp4"
-            if path.exists():
-                paths.append(path)
+            letter_path = Config.FINGERSPELLING / f"{letter.upper()}.mp4"
+            if letter_path.exists():
+                paths.append(letter_path)
             else:
-                print(f"Missing fingerspelling video for '{letter}'")
+                print(f"⚠️ Missing fingerspelling for '{letter}' in '{word}'")
         return paths if paths else None
 
-    def _get_excitement_level(self):
-        """Get current excitement level based on timestamp"""
-        try:
-            # Find the latest excitement value before current_time
-            return self.excitement_data[
-                self.excitement_data['timestamp'] <= self.current_time
-            ].iloc[-1]['excitement']
-        except:
-            return 0.5  # Default if no data
+    def _process_sign_frame(self, frame):
+        """Composite sign video frame with background"""
+        # Resize maintaining aspect ratio
+        h, w = frame.shape[:2]
+        target_w, target_h = Config.VIDEO_SIZE
+        
+        # Calculate padding
+        scale = min(target_w/w, target_h/h)
+        new_size = (int(w*scale), int(h*scale))
+        frame = cv2.resize(frame, new_size)
+        
+        # Create centered composition
+        composite = np.zeros((target_h, target_w, 3), dtype=np.uint8)
+        x_offset = (target_w - new_size[0]) // 2
+        y_offset = (target_h - new_size[1]) // 2
+        composite[y_offset:y_offset+new_size[1], x_offset:x_offset+new_size[0]] = frame
+        
+        # Create mask from non-black pixels
+        gray = cv2.cvtColor(composite, cv2.COLOR_BGR2GRAY)
+        _, mask = cv2.threshold(gray, 1, 255, cv2.THRESH_BINARY)
+        
+        # Animate background
+        bg_offset = int(self.current_time * 15) % Config.VIDEO_SIZE[0]
+        bg = np.roll(self.background, bg_offset, axis=1)
+        
+        # Composite layers
+        foreground = cv2.bitwise_and(composite, composite, mask=mask)
+        background = cv2.bitwise_and(bg, bg, mask=cv2.bitwise_not(mask))
+        return cv2.add(foreground, background)
 
-    def _apply_dynamic_background(self, frame):
-        """Replace background with excitement-based color"""
-        # Get current excitement color
-        excitement = self._get_excitement_level()
-        hue = int(240 * (1 - excitement))  # Blue (240°) to Red (0°)
-        hls = np.uint8([[[hue, config.BACKGROUND_LIGHTNESS, config.BACKGROUND_SATURATION]]])
-        bg_color = cv2.cvtColor(hls, cv2.COLOR_HLS2BGR)[0][0]
-        
-        # Create background
-        background = np.full((*config.VIDEO_SIZE[::-1], 3), bg_color, dtype=np.uint8)
-        
-        # Resize and center frame
-        frame = cv2.resize(frame, (int(config.VIDEO_SIZE[0] * 0.8), 
-                              int(config.VIDEO_SIZE[1] * 0.8)))
-        x = (config.VIDEO_SIZE[0] - frame.shape[1]) // 2
-        y = (config.VIDEO_SIZE[1] - frame.shape[0]) // 2
-        
-        # Composite frame over background
-        background[y:y+frame.shape[0], x:x+frame.shape[1]] = frame
-        
-        # Add effects for high excitement
-        if excitement > 0.7:
-            self._add_sparkles(background, intensity=excitement)
-        
-        return background
-
-    def _add_sparkles(self, image, intensity):
-        """Add sparkle effects to image"""
-        h, w = image.shape[:2]
-        for _ in range(int(50 * intensity)):
-            x, y = np.random.randint(0, w), np.random.randint(0, h)
-            radius = np.random.randint(1, 4)
-            cv2.circle(image, (x, y), radius, (255, 255, 255), -1)
+    def _add_transition(self, out, duration=0.5):
+        """Insert transition animation between signs"""
+        for frame in self.transition_frames[:int(Config.FPS*duration)]:
+            out.write(frame)
+            self.current_time += 1/Config.FPS
 
     def run(self):
-        """Generate the final video with dynamic backgrounds"""
+        """Main video generation workflow"""
         try:
-            # Setup video writer
+            # Setup output
+            Config.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+            output_path = Config.OUTPUT_DIR / "signed_output.mp4"
+            
+            # Initialize video writer
             fourcc = cv2.VideoWriter_fourcc(*'mp4v')
             out = cv2.VideoWriter(
-                str(config.OUTPUT_DIR / "final_video.mp4"),
-                fourcc, config.FPS, config.VIDEO_SIZE)
+                str(output_path),
+                fourcc,
+                Config.FPS,
+                Config.VIDEO_SIZE
+            )
             
-            # Process each word
-            with open(config.OUTPUT_DIR / "gloss.txt") as f:
+            # Load gloss text
+            gloss_path = Config.OUTPUT_DIR / "gloss.txt"
+            if not gloss_path.exists():
+                raise FileNotFoundError(f"Gloss file missing: {gloss_path}")
+                
+            with open(gloss_path) as f:
                 gloss_words = [w.strip() for w in f.read().split() if w.strip()]
             
-            for word in tqdm(gloss_words, desc="Generating Video"):
-                video_source = self._find_video_path(word)
+            # Process each sign
+            for i, word in enumerate(tqdm(gloss_words, desc="Generating Sign Video")):
+                video_source = self._find_sign_video(word)
                 if not video_source:
+                    print(f"⏩ Skipping: '{word}' (no matching sign)")
                     continue
+                
+                # Add transition between signs (except first)
+                if i > 0:
+                    self._add_transition(out)
                 
                 # Handle both single videos and spelling sequences
                 sources = [video_source] if isinstance(video_source, Path) else video_source
@@ -116,18 +167,14 @@ class VideoGenerator:
                         if not ret:
                             break
                         
-                        # Process frame with dynamic background
-                        processed_frame = self._apply_dynamic_background(frame)
-                        out.write(processed_frame)
-                        
-                        # Update timeline
-                        self.current_time += 1/config.FPS
-                    
+                        out.write(self._process_sign_frame(frame))
+                        self.current_time += 1/Config.FPS
                     cap.release()
             
             out.release()
+            print(f"✅ Successfully created: {output_path}")
             return True
             
         except Exception as e:
-            print(f"Video generation failed: {str(e)}")
+            print(f"❌ Generation failed: {e}")
             return False

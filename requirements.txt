@@ -8,3 +8,7 @@ scikit-learn
 tenacity
 python-dotenv
 tqdm
+librosa
+tensorflow
+tensorflow-hub
+scikit-learn

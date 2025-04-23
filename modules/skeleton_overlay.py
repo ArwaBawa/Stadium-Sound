@@ -1,133 +1,180 @@
+# modules/skeleton_overlay.py
 import cv2
 import numpy as np
 import mediapipe as mp
+import librosa
 from pathlib import Path
-from config import config
 from tqdm import tqdm
-import pandas as pd
+from config import Config
+import subprocess
 
 class SkeletonOverlay:
     def __init__(self):
-        # Initialize MediaPipe with custom drawing specs
+        # Initialize MediaPipe components
         self.mp_pose = mp.solutions.pose
         self.mp_hands = mp.solutions.hands
+        self.mp_drawing = mp.solutions.drawing_utils
         
-        # Custom drawing specs (no dots, only lines)
-        self.connection_drawing_spec = mp.solutions.drawing_utils.DrawingSpec(
-            thickness=config.SKELETON_THICKNESS,
-            color=config.SKELETON_COLOR
-        )
-        # Empty spec for landmarks (invisible)
-        self.landmark_drawing_spec = mp.solutions.drawing_utils.DrawingSpec(
-            thickness=0,
-            circle_radius=0
-        )
-
+        # Initialize models
         self.pose = self.mp_pose.Pose(
-            min_detection_confidence=0.5,
-            min_tracking_confidence=0.5
+            static_image_mode=False,
+            min_detection_confidence=0.7,
+            min_tracking_confidence=0.7
         )
         self.hands = self.mp_hands.Hands(
-            min_detection_confidence=0.5,
-            min_tracking_confidence=0.5
+            static_image_mode=False,
+            max_num_hands=2,
+            min_detection_confidence=0.7,
+            min_tracking_confidence=0.7
         )
 
-    def _create_background(self, excitement):
-        """Create dynamic colored background"""
-        hue = int(240 * (1 - excitement))  # Blue to red
-        hls = np.uint8([[[hue, config.BACKGROUND_LIGHTNESS, config.BACKGROUND_SATURATION]]])
-        return cv2.cvtColor(hls, cv2.COLOR_HLS2BGR)[0][0]
+        # Audio visualization parameters
+        self.sr = 22050  # Sample rate
+        self.fps = 30    # Video frame rate
+        self.lines = 6   # Number of wave lines
 
-    def _add_effects(self, image, excitement):
-        """Add sparkle effects during high excitement"""
-        if excitement > 0.7:
-            h, w = image.shape[:2]
-            for _ in range(int(50 * excitement)):
-                x = np.random.randint(0, w)
-                y = np.random.randint(0, h)
-                cv2.circle(image, (x, y), 
-                          np.random.randint(1, 3), 
-                          (255, 255, 255), -1)
-
-    def _draw_clean_skeleton(self, image, results_pose, results_hands):
-        """Draw only skeleton connections (no dots)"""
-        # Draw pose connections
-        if results_pose.pose_landmarks:
-            mp.solutions.drawing_utils.draw_landmarks(
-                image,
-                results_pose.pose_landmarks,
-                self.mp_pose.POSE_CONNECTIONS,
-                landmark_drawing_spec=self.landmark_drawing_spec,
-                connection_drawing_spec=self.connection_drawing_spec)
+    def load_audio(self, audio_path):
+        """Load and process audio file for visualization"""
+        self.audio, _ = librosa.load(audio_path, sr=self.sr)
+        self.frame_size = int(self.sr / self.fps)
+        self.total_frames = int(len(self.audio) / self.frame_size)
         
-        # Draw hand connections
-        if results_hands.multi_hand_landmarks:
-            for landmarks in results_hands.multi_hand_landmarks:
-                mp.solutions.drawing_utils.draw_landmarks(
-                    image,
-                    landmarks,
-                    self.mp_hands.HAND_CONNECTIONS,
-                    landmark_drawing_spec=self.landmark_drawing_spec,
-                    connection_drawing_spec=self.connection_drawing_spec)
+        # Calculate volume levels
+        self.volume_levels = librosa.feature.rms(
+            y=self.audio, 
+            frame_length=self.frame_size, 
+            hop_length=self.frame_size
+        )[0]
+        # Normalize volume levels
+        self.volume_levels = (self.volume_levels - self.volume_levels.min()) / \
+                           (self.volume_levels.max() - self.volume_levels.min() + 1e-6)
 
-    def process_frame(self, frame, excitement):
-        """Process single frame to create clean skeleton visualization"""
-        # Create colored background
-        background = np.full((*config.VIDEO_SIZE[::-1], 3), 
-                           self._create_background(excitement),
-                           dtype=np.uint8)
+    def generate_wave_background(self, frame_num, width, height):
+        """Generate reactive wave background for current frame"""
+        bg = np.zeros((height, width, 3), dtype=np.uint8)
         
-        # Process frame with MediaPipe
+        if frame_num >= len(self.volume_levels):
+            return bg
+        
+        volume = self.volume_levels[frame_num]
+        x = np.linspace(0, width, width)
+        
+        for i in range(self.lines):
+            # Wave parameters
+            frequency = 0.002 + i * 0.0004
+            amplitude = (20 + volume * 60) * (0.6 + i / self.lines)
+            y_offset = i * 18 + height//3
+            
+            # Generate wave points
+            y = np.sin(2 * np.pi * (frequency * x + frame_num * 0.02)) * amplitude + y_offset
+            
+            # Color based on volume
+            if volume > 0.7:
+                color = (255, int(100 + 155 * volume), 100)  # Warm colors
+            elif volume < 0.3:
+                color = (100, 100, int(100 + 155 * (1-volume)))  # Cool colors
+            else:
+                hue = i / self.lines
+                color = (int(255 * hue), int(255 * (1 - hue)), 128)  # Rainbow
+            
+            # Draw wave line
+            points = np.column_stack((x, y)).astype(np.int32)
+            cv2.polylines(bg, [points], isClosed=False, color=color, thickness=2)
+        
+        return bg
+
+    def process_frame(self, frame, frame_num):
+        """Process single frame with skeleton and wave background"""
+        height, width = frame.shape[:2]
+        
+        # Generate reactive background
+        background = self.generate_wave_background(frame_num, width, height)
+        
+        # Detect skeleton
         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         results_pose = self.pose.process(frame_rgb)
         results_hands = self.hands.process(frame_rgb)
         
-        # Draw clean skeleton
-        self._draw_clean_skeleton(background, results_pose, results_hands)
+        # Draw skeleton on background
+        if results_pose.pose_landmarks:
+            self.mp_drawing.draw_landmarks(
+                background,
+                results_pose.pose_landmarks,
+                self.mp_pose.POSE_CONNECTIONS,
+                landmark_drawing_spec=None,
+                connection_drawing_spec=self.mp_drawing.DrawingSpec(
+                    color=Config.SKELETON_COLOR,
+                    thickness=Config.SKELETON_THICKNESS)
+            )
         
-        # Add effects
-        self._add_effects(background, excitement)
+        if results_hands.multi_hand_landmarks:
+            for landmarks in results_hands.multi_hand_landmarks:
+                self.mp_drawing.draw_landmarks(
+                    background,
+                    landmarks,
+                    self.mp_hands.HAND_CONNECTIONS,
+                    landmark_drawing_spec=None,
+                    connection_drawing_spec=self.mp_drawing.DrawingSpec(
+                        color=Config.HAND_COLOR,
+                        thickness=Config.SKELETON_THICKNESS)
+                )
         
         return background
 
     def run(self):
-        """Process entire video"""
+        """Process video with skeleton overlay and wave background"""
         try:
-            # Setup video I/O
-            input_path = config.OUTPUT_DIR / "final_video.mp4"
-            output_path = config.OUTPUT_DIR / "final_with_skeleton.mp4"
+            input_path = Config.OUTPUT_DIR / "signed_output.mp4"
+            audio_path = "data/input/football-crowd-goal.wav"
+            output_path = Config.OUTPUT_DIR / "skeleton_output.mp4"
             
+            # Load audio data
+            self.load_audio(str(audio_path))
+            
+            # Open video file
             cap = cv2.VideoCapture(str(input_path))
             fps = cap.get(cv2.CAP_PROP_FPS)
+            width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
             total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
             
+            # Initialize video writer
+            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
             out = cv2.VideoWriter(
                 str(output_path),
-                cv2.VideoWriter_fourcc(*'mp4v'),
-                fps, config.VIDEO_SIZE)
+                fourcc,
+                fps,
+                (width, height))
             
-            # Load excitement data
-            excitement_data = pd.read_csv(config.OUTPUT_DIR / "excitement.csv")
-            
-            # Process frames
-            for frame_num in tqdm(range(total_frames), desc="Generating Skeleton"):
+            # Process frames with progress bar
+            for frame_num in tqdm(range(total_frames), desc="Adding Skeleton & Waves"):
                 ret, frame = cap.read()
                 if not ret:
                     break
                 
-                # Get current excitement
-                current_time = frame_num / fps
-                excitement = excitement_data[
-                    excitement_data['timestamp'] <= current_time
-                ].iloc[-1]['excitement']
-                
-                # Process and write frame
-                out.write(self.process_frame(frame, excitement))
+                processed = self.process_frame(frame, frame_num)
+                out.write(processed)
             
+            # Release resources
             cap.release()
             out.release()
+            
+            # Combine with audio
+            temp_output = output_path.with_name(f"temp_{output_path.name}")
+            command = [
+                "ffmpeg", "-y",
+                "-i", str(output_path),
+                "-i", str(audio_path),
+                "-c:v", "copy",
+                "-c:a", "aac",
+                "-shortest",
+                str(temp_output)
+            ]
+            subprocess.run(command, check=True)
+            temp_output.replace(output_path)
+            
             return True
             
         except Exception as e:
-            print(f"Skeleton generation error: {str(e)}")
+            print(f"Skeleton processing error: {e}")
             return False
