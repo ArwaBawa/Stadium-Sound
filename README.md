@@ -39,4 +39,4 @@ Can be deployed on both stadium screens and AR glasses for flexible and inclusiv
 - Extend translation to full live commentary with broader vocabulary and context understanding
 - Integrate emotion-aware facial expressions and signing speed to reflect urgency
 - Add support for multiple regional sign languages (ASL, BSL, Arabic SL, etc.)
-- Optimize for AR glasses with real-time processing and user-focused display features
+- Use Ai agent to generate the sign rather than relying on human 
