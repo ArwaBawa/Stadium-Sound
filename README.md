@@ -25,14 +25,15 @@ Can be deployed on both stadium screens and AR glasses for flexible and inclusiv
 - **ML Classification Model** (for background emotion mapping)
 - **MediaPipe** (for gesture recognition and avatar control)
 
+# Methodology
   ![image](https://github.com/user-attachments/assets/bd7919cc-3dc3-49d6-8179-90344c6ea5af)
 
 # Datasets Used
 
-**Football Match Commentary** – Collected manually from real football matches
-**General Words Dataset** – Public datasets used to train everyday vocabulary
-**Sign Language Gloss Dataset** – Combination of online resources and custom-created glosses specific to football
-**Emotion & Crowd Noise Data** – Audio datasets from online sources and manually extracted match recordings
+- **Football Match Commentary** – Collected manually from real football matches
+- **General Words Dataset** – Public datasets used to train everyday vocabulary
+- **Sign Language Gloss Dataset** – Combination of online resources and custom-created glosses specific to football
+- **Emotion & Crowd Noise Data** – Audio datasets from online sources and manually extracted match recordings
 
 # Future Work
 
